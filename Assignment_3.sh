@@ -1,7 +1,4 @@
 #!/bin/bash
-# This script creates a virtual network suitable for learning about networking
-# created by dennis simpson 2023, all rights reserved
-
 lannetnum="192.168.16"
 mgmtnetnum="172.16.1"
 prefix=server
