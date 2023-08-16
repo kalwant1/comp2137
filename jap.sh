@@ -120,24 +120,26 @@ else
   # Create a new user account.
   echo "Creating User 'dennis'"
   useradd -m -s /bin/bash dennis
-  # Create a home directory for the new user.
-  mkdir -p /home/dennis
+
   # Generate an SSH key for the new user.
   echo "Generating and adding SSH Keys.."
-  ssh-keygen -t rsa -f /home/dennis/.ssh/id_rsa -N ""
-  ssh-keygen -t ed25519 -f /home/dennis/.ssh/id_ed25519 -N ""
+  ssh-keygen -t rsa -f ~/dennis/.ssh/id_rsa -N ""
+  ssh-keygen -t ed25519 -f ~/dennis/.ssh/id_ed25519 -N ""
   # Add the public SSH keys to the new user's authorized_keys file.
-  cat /home/dennis/.ssh/id_rsa.pub >> /home/dennis/.ssh/authorized_keys
-  cat /home/dennis/.ssh/id_ed25519.pub >> /home/dennis/.ssh/authorized_keys
+  cat ~/dennis/.ssh/id_rsa.pub >> ~/dennis/.ssh/authorized_keys
+  cat ~/dennis/.ssh/id_ed25519.pub >> ~/dennis/.ssh/authorized_keys
   # now add the given ssh key
-  ssh-keygen -f /home/dennis/.ssh/authorized_keys -t ed25519 -N "" -e < ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG4rT3vTt99Ox5kndS4HmgTrKBT8SKzhK4rhGkEVGlCI student@generic-vm
+  ssh-keygen -f ~/dennis/.ssh/authorized_keys -t ed25519 -N "" -e < ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG4rT3vTt99Ox5kndS4HmgTrKBT8SKzhK4rhGkEVGlCI student@generic-vm
 
   # Change the permissions on the new user's home directory and SSH keys.
   echo "Setting Permissions.."
+  #RWE
   chmod 700 /home/dennis
+  #Owner: Read (r) and Write (w) permissions. Group: No permissions. Others: No permissions
   chmod 600 /home/dennis/.ssh
   chmod 600 /home/dennis/.ssh/id_rsa
   chmod 600 /home/dennis/.ssh/id_ed25519
+  #Owner: Read and write (4 + 2 = 6) Group: Read only (4) Others: Read only (4)
   chmod 644 /home/dennis/.ssh/authorized_keys
   # setting sudo permissions for dennis.
   sudo usermod -aG sudo username
