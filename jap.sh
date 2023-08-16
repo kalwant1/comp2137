@@ -1,47 +1,44 @@
 #!/bin/bash
-# Check if the system is already configured correctly.
+
 # Check if the hostname is set to autosrv.
 if [ "$(hostname)" != "autosrv" ]; then
   echo "Setting hostname to autosrv..."
   hostnamectl set-hostname autosrv
+else
+  echo "Hostname is already set. "
 fi
-
-
-
-
 
 
 # Check if the network configuration is correct.
 
 
+local interface="ens34"
+local ip_address="192.168.16.21/24"
+local gateway="192.168.16.1"
 
-# Check if the interface is ens34, ens37, or enp3s8.
-if ! [[ "$(ip addr show | grep -E 'ens34|ens37|enp3s8')" ]]; then
-  echo "Creating interface ens34..."
-  ip link add ens34 type ethernet
+    # Check if interface exists
+if ! ip link show $interface &> /dev/null; then
+    echo "Interface $interface not found."
 fi
-# Set the interface up.
-echo "Setting interface ens34 up..."
-ip link set ens34 up
-# Add an IP address to the interface.
-echo "Adding IP address 192.168.16.21/24 to interface ens34..."
-ip addr add 192.168.16.21/24 dev ens34
-# Add a default route to the interface.
-echo "Adding default route via 192.168.16.1 to interface ens34..."
-ip route add default via 192.168.16.1 dev ens34
-# Check if the IP address and gateway/DNS server are already configured.
-if ! [[ "$(ip addr show ens34 | grep 'inet 192.168.16.21/24')" ]]; then
-  echo "Adding IP address 192.168.16.21/24 to interface ens34..."
-  ip addr add 192.168.16.21/24 dev ens34
+
+    # Check if IP address is set
+if ! ip addr show $interface | grep -q "$ip_address"; then
+    echo "Setting IP address $ip_address on $interface..."
+    ip addr add $ip_address dev $interface
 fi
-if ! [[ "$(ip route show | grep 'default via 192.168.16.1')" ]]; then
-  echo "Adding default route via 192.168.16.1 to interface ens34..."
-  ip route add default via 192.168.16.1 dev ens34
+
+    # Check if default gateway is set
+if ! ip route | grep -q "default via $gateway"; then
+    echo "Setting default gateway $gateway via $interface..."
+    ip route add default via $gateway dev $interface
 fi
+
+
 # Set the DNS search domains to home.arpa and localdomain.
 echo "Setting DNS search domains to home.arpa and localdomain..."
 echo 'search home.arpa localdomain' >> /etc/resolv.conf
 echo "Your Network Configurations are set."
+echo "Network Settings are up to date"
 
 
 
@@ -50,53 +47,14 @@ echo "Your Network Configurations are set."
 
 
 
-
-# Check if the software is installed correctly.
-
-
-
-
-
-# Check if the SSH server is installed
-if ! sudo apt-get install openssh-server; then
-  echo "The SSH server is not installed."
-  echo "Installing.."
-  sudo apt update
-  sudo apt install openssh-server
-  echo "Done."
-fi
-
-# Check if the Apache web server is installed
-if ! sudo apt-get install apache2; then
-  echo "The Apache web server is not installed."
-  sudo apt-get install apache2
-  echo "Installing.."
-  echo "Done."
-fi
-
-# Check if the Squid web proxy is installed
-if ! sudo apt-get install squid; then
-  echo "The Squid web proxy is not installed."
-  sudo apt-get install squid
-  echo "Installing.."
-  echo "Done."
-fi
+# to check and set software configuration
+apt-get update
+apt-get install -y openssh-server apache2 squid
+sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/g' /etc/ssh/sshd_config
+echo "Software configurations are up to date"
 
 
 
-# Check if the SSH server is configured to allow SSH key authentication and not allow password authentication
-if ! sudo grep -v '^PasswordAuthentication yes' /etc/ssh/sshd_config; then
-  echo "The SSH server is not configured to allow SSH key authentication and not allow password authentication."
-fi
-# Check if the Apache web server is listening for HTTP on port 80 and HTTPS on port 443
-if ! sudo netstat -tulpn | grep apache2; then
-  echo "The Apache web server is not listening for HTTP on port 80 and HTTPS on port 443."
-fi
-# Check if the Squid web proxy is listening on port 3128
-if ! sudo netstat -tulpn | grep squid; then
-  echo "The Squid web proxy is not listening on port 3128."
-fi
-# All checks passed!
 echo "The software is installed and configured correctly."
 
 
@@ -115,26 +73,24 @@ ufw status
 # Check if the ssh port is open.
 if ! ufw status | grep '22/tcp'; then
   echo "The ssh port is not open."
+  ufw allow 22/tcp
 fi
 # Check if the http port is open.
 if ! ufw status | grep '80/tcp'; then
   echo "The http port is not open."
+  ufw allow 80/tcp
 fi
 # Check if the https port is open.
 if ! ufw status | grep '443/tcp'; then
   echo "The https port is not open."
+  ufw allow 443/tcp
 fi
 # Check if the web proxy port is open.
 if ! ufw status | grep '3128/tcp'; then
   echo "The web proxy port is not open."
+  ufw allow 3128/tcp
 fi
 
-# add the rules which are not there.
-echo "Adding the required rules.."
-ufw allow 22/tcp
-ufw allow 80/tcp
-ufw allow 443/tcp
-ufw allow 3128/tcp
 # Reload the firewall rules.
 echo "Reloading the Firewall.."
 ufw reload
@@ -199,13 +155,14 @@ fi
 # Create a new user account for each user.
 echo "Adding Users."
 for user in ("aubrey", "captain", "nibbles", "brownie", "scooter", "sandy", "perrier", "cindy", "tiger", "yoda"); do
-  useradd -m -s /bin/bash $user
-done
-
-# Create a home directory for each user.
-echo "Creating Home Directories."
-for user in ("aubrey", "captain", "nibbles", "brownie", "scooter", "sandy", "perrier", "cindy", "tiger", "yoda"); do
-  mkdir -p /home/$user
+  id -u $user >/dev/null 2>&1
+  if [ "$?" == "0" ]; then
+    echo "user $user already exist."
+  else
+    echo "user $user doesn't exist."
+    useradd -m -s /bin/bash $user
+  fi
+    
 done
 
 # Generate an SSH key for each user.
