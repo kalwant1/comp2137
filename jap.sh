@@ -16,22 +16,28 @@ local interface="ens34"
 local ip_address="192.168.16.21/24"
 local gateway="192.168.16.1"
 
-    # Check if interface exists
-if ! ip link show $interface &> /dev/null; then
-    echo "Interface $interface not found."
+# Check if the interface is ens34, ens37, or enp3s8.
+if ! [[ "$(ip addr show | grep -E 'ens34|ens37|enp3s8')" ]]; then
+  echo "Creating interface ens34..."
+  ip link add ens34 type ethernet
 fi
-
-    # Check if IP address is set
-if ! ip addr show $interface | grep -q "$ip_address"; then
-    echo "Setting IP address $ip_address on $interface..."
-    ip addr add $ip_address dev $interface
+# Set the interface up.
+echo "Setting interface ens34 up..."
+ip link set ens34 up
+# Add an IP address to the interface.
+echo "Adding IP address 192.168.16.21/24 to interface ens34..."
+ip addr add 192.168.16.21/24 dev ens34
+# Add a default route to the interface.
+echo "Adding default route via 192.168.16.1 to interface ens34..."
+ip route add default via 192.168.16.1 dev ens34
+# Check if the IP address and gateway/DNS server are already configured.
+if ! [[ "$(ip addr show ens34 | grep 'inet 192.168.16.21/24')" ]]; then
+  echo "Adding IP address 192.168.16.21/24 to interface ens34..."
+  ip addr add 192.168.16.21/24 dev ens34
 fi
-
-    # Check if default gateway is set
-if ! ip route | grep -q "default via $gateway"; then
-    echo "Setting default gateway $gateway via $interface..."
-    ip route add default via $gateway dev $interface
-fi
+if ! [[ "$(ip route show | grep 'default via 192.168.16.1')" ]]; then
+  echo "Adding default route via 192.168.16.1 to interface ens34..."
+  ip route add default via 192.168.16.1 dev ens34
 
 
 # Set the DNS search domains to home.arpa and localdomain.
