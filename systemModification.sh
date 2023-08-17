@@ -1,215 +1,155 @@
-#!/bin/sh
-# (Free-)BSD mobile work station network control script. Inspired by:
-# - network.sh from vermaden
-# - wifimgr from gihnius
-# - wifish from bougyman
+#!/bin/bash
 
-# Requirements:
-# - doas
-# - ifconfig
-# - wpa_supplicant
+EXPECTED_HOSTNAME="autosrv"
 
-# Settings
-ROOT=`which doas`
+# Get the current hostname
+current_hostname=$(hostname)
 
-# LAN Network
-LAN_IF=em0
+# Check if the hostname matches the expected value
+if [ "$current_hostname" = "$EXPECTED_HOSTNAME" ]; then
+	    echo "Hostname is already set to '$EXPECTED_HOSTNAME'"
+    else
+	        # Update the hostname
+		    echo "Updating hostname to '$EXPECTED_HOSTNAME'..."
+		        sudo hostnamectl set-hostname "$EXPECTED_HOSTNAME"
+			    echo "Hostname updated successfully."
+fi
 
-# Wireless Network
-WLAN_IF=wlan0
-WLAN_PH=iwn0
-WLAN_TMP_RESULTS=/tmp/${WLAN_IF}.scan
+EXPECTED_ADDRESS="192.168.16.21/24"
+EXPECTED_GATEWAY="192.168.16.1"
+EXPECTED_DNS_SERVER="192.168.16.1"
+EXPECTED_DNS_SEARCH="home.arpa localdomain"
+INTERFACE="enp0s8"
 
-# Support multiple VPNs (ovpn for OpenVPN, oc for OpenConnect)
-VPNS="ovpn:frubar oc:avira oc:anexia"
+# Get the current configuration of the interface
+current_address=$(ip addr show dev "$INTERFACE" | awk '/inet / {print $2}')
+current_gateway=$(ip route show default | awk '/default/ {print $3}')
+current_dns_server=$(cat /etc/resolv.conf | awk '/nameserver/ {print $2}')
+current_dns_search=$(cat /etc/resolv.conf | awk '/search/ {$1=""; print $0}' | tr -s ' ')
 
-# Resolver IPs (type:ip)
-RESOLVERS="local:192.162.16.21/24 resolver:0.0.0.0 google:8.8.8.8 google:8.8.4.4"
-
-__usage() {
-	dns=$(echo ${RESOLVERS} | sed 's_:[^ ]*__g' | xargs -n1 | sort -u | xargs)
-	vpn=$(echo ${VPNS} | tr ' ' '|')
-	cat <<-EOF
-	${0} [status|lan|wlan|dns|vpn]
-
-	PARAMS
-	  status
-	  lan    [start|stop|restart]
-	  wlan   [start|stop|restart|scan|rescan|new|list|connect]
-	  dns    [${dns}]
-	  vpn    [${vpn}]
-	EOF
-	unset dns vpn
-	exit 1
-}
-
-__net_status() {
-	( netstat -in -f inet; netstat -in -f inet6 ) \
-		| grep -Ev "(fe80|lo)"  \
-		| sed 's|^Name|^Name|g' \
-		| sort | uniq \
-		| sed 's|\^Name|Name|g'
-}
-
-__lan_start() {
-	${ROOT} service netif start ${LAN_IF}
-}
-__lan_stop() {
-	${ROOT} service netif stop ${LAN_IF}
-}
-
-__wlan_start() {
-	${ROOT} service netif start ${WLAN_IF}
-}
-__wlan_stop() {
-	${ROOT} service netif stop ${WLAN_IF}
-}
-
-__wlan_rescan() {
-	rm -f ${WLAN_TMP_RESULTS}
-	__wlan_scan
-}
-
-__wlan_scan() {
-	if [ $(stat -f "%m" ${WLAN_TMP_RESULTS} 2>/dev/null || echo 0) -lt $(date -j -v-30M +%s) ]; then
-		rm -f ${WLAN_TMP_RESULTS}
-	fi
-	if [ ! -r ${WLAN_TMP_RESULTS} ]; then
-		${ROOT} ifconfig ${WLAN_IF} scan >/dev/null && sleep 2
-		${ROOT} ifconfig ${WLAN_IF} list scan | gsed -e 's|\(-[0-9]*\):\-[0-9]*|\1|g' -e 's| \{2,\}|\x0|g' | sort -r -g -t '\0' -k 5 | gawk -F '\0' '
-		BEGIN { NR=NR; longest_ssid = 0 }
-		/SSID\/MESH ID.*/ { next; }
-		{
-			line[NR]["ssid"]   = $1
-			line[NR]["mac"]    = $2
-			line[NR]["chan"]   = $3
-			line[NR]["rate"]   = $4
-			line[NR]["signal"] = $5
-			$1 = $2 = $3 = $4 = $5 = $6 = ""
-			line[NR]["caps"]   = $0
-			if(length(line[NR]["ssid"]) > longest_ssid)
-				longest_ssid = length(line[NR]["ssid"])+10
-		}
-		END {
-			#printf "%-"longest_ssid"s %-6s %-19s %s\n", "SSID", "SIGNAL", "MAC", "CAPABILITIES"
-			for(i in line) {
-				ssid   = line[i]["ssid"]
-				signal = line[i]["signal"]+100
-				
-				if(ssid ~ /^$/) ssid="HIDDEN"
-
-				printf "%-"longest_ssid"s %-6s %-19s %s\n", ssid, signal, line[i]["mac"], line[i]["caps"]
-			}
-		}
-		' > ${WLAN_TMP_RESULTS}
-	fi
-	cat ${WLAN_TMP_RESULTS}
-}
-
-__wlan_list() {
-	wpa_cli list_networks | gawk '
-		BEGIN {
-			FS="\t";
-			printf "%-4s\t%-s\n", "ID", "SSID"
-		}
-		$1~/^[[:digit:]]/ {
-			printf "%-4d\t%-s\n", $1, $2
-		}
-	'
-}
-
-__wlan_connect() {
-	wlan_tmp_results="$(__wlan_scan)"
-	network_id=$(__wlan_list | while read wlan_list; do
-		id="${wlan_list%$'\t'*}"
-		ssid="${wlan_list#*$'\t'}"
-		if result=$(IFS=$'\n' echo "$wlan_tmp_results}" | grep -e "${ssid}\ \{2,\}"); then
-			echo "$id $result"
-		fi
-	done | grep -e '^[0-9]*\ \{2,\}' | sort -k 3 -r | pick | awk '{ print $1 }')
-	wpa_cli select_network ${network_id}
-	unset wlan_tmp_results network_id id ssid result
-}
-
-__wlan_new() {
-	selected=$(__wlan_scan | pick)
-	ssid=$(echo ${selected} | sed 's| [0-9][0-9] [a-z0-9].*||g')
-	if ! __wlan_list | grep -q "${ssid}$"; then
-		network_id=$(wpa_cli add_network | tail -n 1)
+# Compare current configuration with expected values
+if [ "$current_address" = "$EXPECTED_ADDRESS" ] && [ "$current_gateway" = "$EXPECTED_GATEWAY" ] && [ "$current_dns_server" = "$EXPECTED_DNS_SERVER" ] && [ "$current_dns_search" = "$EXPECTED_DNS_SEARCH" ]; then
+    echo "Network configuration is already set correctly."
+else
+	    # Update the network configuration
+	        echo "Updating network configuration..."
+		    sudo ip addr flush dev "$INTERFACE"
+		        sudo ip addr add "$EXPECTED_ADDRESS" dev "$INTERFACE"
+			    sudo ip route add default via "$EXPECTED_GATEWAY" dev "$INTERFACE"
+			        echo "nameserver $EXPECTED_DNS_SERVER" | sudo tee /etc/resolv.conf > /dev/null
+				    echo "search $EXPECTED_DNS_SEARCH" | sudo tee -a /etc/resolv.conf > /dev/null
+				        echo "Network configuration updated successfully."
+fi
 
 
-		if [ -z "${selected##*RSN*}" ]; then
-			while true; do
-				stty -echo
-				read -p 'Passphrase: ' passphrase
-				stty echo
-				[ -n "${passphrase}" ] && break
-			done
-
-			# WPA2
-			wpa_cli set_network ${network_id} key_mgmt WPA-PSK
-			wpa_cli set_network ${network_id} proto    WPA2
-			wpa_cli set_network ${network_id} psk      "\"${passphrase}\""
+sudo apt-get install -y ssh apache2 squid ufw
+# Check and configure SSH settings
+if ! grep -q "PasswordAuthentication no" /etc/ssh/sshd_config; then
+	    echo "Configuring SSH..."
+	        sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+		    sudo systemctl restart ssh
+		        echo "SSH configured."
 		else
-			wpa_cli set_network ${network_id} key_mgmt NONE
-		fi
-		wpa_cli set_network ${network_id} ssid "\"${ssid}\""
-		wpa_cli select_network ${network_id}
-		wpa_cli save_config
-	fi
-	unset selected ssid network_id passphrase
-}
+			    echo "SSH already configured."
+fi
 
-__dns() {
-	for resolver in ${RESOLVERS}; do
-		if echo ${resolver} | grep -qe "^${1}"; then
-			echo '# Managed by net.sh'
-			value=$(echo ${resolver} | gsed 's/\(.*\):\(.*\)/\2/g')
-			if [ "${value}" == "0.0.0.0" ]; then
-				resolvconf -l
-			else
-				echo nameserver ${value}
-			fi
-		fi
-	done | ${ROOT} tee /etc/resolv.conf >/dev/null
-	unset resolver value
-}
+# Check and configure Apache2 for HTTP and HTTPS
+if ! grep -q "Listen 80" /etc/apache2/ports.conf; then
+	    echo "Configuring Apache2 for HTTP..."
+	        sudo sed -i 's/Listen 80/Listen 80\nListen 443/' /etc/apache2/ports.conf
+		    sudo systemctl restart apache2
+		        echo "Apache2 configured for HTTP and HTTPS."
+		else
+			    echo "Apache2 already configured."
+fi
 
-# Main
-case ${1} in
-	lan)
-		case ${2} in
-			start)   __lan_start               ;;
-			stop)    __lan_stop                ;;
-			restart) __lan_stop && __lan_start ;;
-			*)       __usage                   ;;
-		esac
-		;;
-	wlan)
-		case ${2} in
-			start)   __wlan_start                ;;
-			scan)    __wlan_scan                 ;;
-			rescan)  __wlan_rescan               ;;
-			list)    __wlan_list                 ;;
-			con*)    __wlan_connect              ;;
-			new)     __wlan_new                  ;;
-			stop)    __wlan_stop                 ;;
-			restart) __wlan_stop && __wlan_start ;;
-			*)       __usage                     ;;
-		esac
-		;;
-	vpn)
-		case ${2} in
-			connect)    __vpn_connect ${3}    ;;
-			disconnect) __vpn_disconnect ${3} ;;
-			status)     __vpn_status          ;;
-			*)          __usage               ;;
-		esac
-		;;
-	dns)
-		test "${RESOLVERS#*$2}" != "$RESOLVERS" || __usage
-		__dns ${2}
-		;;
-	status) __net_status ;;
-	*)      __usage; echo $__vpns      ;;
-esac
+# Check and configure Squid for port 3128
+if ! grep -q "http_port 3128" /etc/squid/squid.conf; then
+	    echo "Configuring Squid for port 3128..."
+	        sudo sed -i 's/http_port .*/http_port 3128/' /etc/squid/squid.conf
+		    sudo systemctl restart squid
+		        echo "Squid configured for port 3128."
+		else
+			    echo "Squid already configured."
+fi
+
+echo "Configuration check and update complete."
+#Allow SSH on port 22
+if ! sudo ufw status | grep -q "22/tcp"; then
+	    echo "Allowing SSH on port 22..."
+	        sudo ufw allow 22/tcp
+		    echo "SSH allowed on port 22."
+fi
+
+# Allow HTTP on port 80
+if ! sudo ufw status | grep -q "80/tcp"; then
+	    echo "Allowing HTTP on port 80..."
+	        sudo ufw allow 80/tcp
+		    echo "HTTP allowed on port 80."
+fi
+
+# Allow HTTPS on port 443
+if ! sudo ufw status | grep -q "443/tcp"; then
+	    echo "Allowing HTTPS on port 443..."
+	        sudo ufw allow 443/tcp
+		    echo "HTTPS allowed on port 443."
+fi
+
+# Allow web proxy on port 3128
+if ! sudo ufw status | grep -q "3128/tcp"; then
+	    echo "Allowing web proxy on port 3128..."
+	        sudo ufw allow 3128/tcp
+		    echo "Web proxy allowed on port 3128."
+fi
+
+# Enable UFW
+if ! sudo ufw status | grep -q "Status: active"; then
+	    echo "Enabling UFW..."
+	        sudo ufw --force enable
+		    echo "UFW enabled."
+fi
+
+echo "Firewall configuration complete."
+
+# List of user configurations
+USERS=("dennis:sudo:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG4rT3vTt99Ox5kndS4HmgTrKBT8SKzhK4rhGkEVGlCI student@generic-vm"
+    "aubrey::"
+    "captain::"
+    "snibbles::"
+    "brownie::"
+    "scooter::"
+    "sandy::"
+    "perrier::"
+    "cindy::"
+    "tiger::"
+    "yoda::"
+)
+
+# Create users and configure SSH keys
+for user_config in "${USERS[@]}"; do
+    IFS=":" read -r username sudo_key ssh_keys <<< "$user_config"
+    
+    # Check if the user already exists
+    if id "$username" &>/dev/null; then
+        echo "User '$username' already exists."
+    else
+        echo "Creating user '$username'..."
+        sudo adduser --disabled-password --gecos "" "$username"
+        echo "$username ALL=(ALL) NOPASSWD:ALL" | sudo tee "/etc/sudoers.d/$username" > /dev/null
+        echo "User '$username' created."
+    fi
+    
+    # Configure SSH keys for the user
+    if [ -n "$ssh_keys" ]; then
+        home_dir="/home/$username"
+        ssh_dir="$home_dir/.ssh"
+        authorized_keys="$ssh_dir/authorized_keys"
+        
+        sudo mkdir -p "$ssh_dir"
+        echo "$ssh_keys" | sudo tee -a "$authorized_keys" > /dev/null
+        sudo chown -R "$username:$username" "$ssh_dir"
+        echo "SSH keys configured for user '$username'."
+    fi
+done
+
+echo "User account creation and configuration complete."
